@@ -1,5 +1,7 @@
 # Habits — a private habit tracker that lives on your phone
 
+**Open the app:** https://sam202301.github.io/FIRST-GITHUB-PROJECT/ (in Safari → Share → Add to Home Screen)
+
 A habit tracker you install straight onto your iPhone (or Android) Home Screen.
 It does **not** come from the App Store and needs no Apple developer account,
 so nothing expires and nobody can switch it off. All your data stays on the
