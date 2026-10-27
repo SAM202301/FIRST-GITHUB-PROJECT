@@ -7,6 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
+const APP_VERSION = '1.4.0'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -310,6 +311,7 @@ function viewToday() {
     <button data-act="day" data-n="1" aria-label="Next day" ${isToday ? 'style="visibility:hidden"' : ''}>›</button>
   </div>`;
 
+  html += updateBanner();
   html += reminderBanner();
 
   if (state.firstRun) {
@@ -611,7 +613,7 @@ function viewSettings() {
   const notifState = EMBEDDED || !('Notification' in window) ? 'unsupported' : Notification.permission;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 
-  let html = '';
+  let html = updateBanner();
   if (EMBEDDED) {
     html += `<div class="banner">ℹ️<div><b>You’re using the hosted copy</b><br><span class="small">Your habits are saved in this browser on this phone. For the best experience, add this page to your Home Screen (Share → Add to Home Screen), always open it from there, and copy a backup every week or so (Settings → Your data).</span></div></div>`;
   } else if (!standalone) {
@@ -670,7 +672,12 @@ function viewSettings() {
       : '<button class="btn secondary block" data-act="import">📂 Restore from backup</button><button class="btn secondary block" data-act="paste">📋 Restore by pasting backup text</button>'}
     <button class="btn danger block" data-act="reset">Erase all data</button>
   </div>
-  <p class="center small muted">Habits · works offline · v1.0</p>`;
+  ${EMBEDDED ? '' : `<div class="section-title"><span>App version</span></div><div class="card">
+    <div class="list-item"><span class="grow">Version ${APP_VERSION}<br><span class="small muted">${
+      upd.ready ? 'A new version is ready to install' : 'Updates are checked each time you open the app'}</span></span>
+      ${upd.ready ? '<button class="btn small" data-act="update">Install update</button>'
+        : '<button class="btn small secondary" data-act="checkupdate">Check for updates</button>'}</div></div>`}
+  <p class="center small muted">Habits · works offline · v${APP_VERSION}</p>`;
   return html;
 }
 
@@ -806,6 +813,8 @@ $('#view').addEventListener('click', e => {
     case 'export': exportData(); break;
     case 'import': $('#importFile').click(); break;
     case 'paste': openPasteRestore(); break;
+    case 'update': installUpdate(); break;
+    case 'checkupdate': checkForUpdate(true); break;
     case 'reset':
       ask('Erase ALL habits and history from this phone? This cannot be undone.', 'Erase everything', true).then(ok => {
         if (!ok) return;
@@ -1071,6 +1080,85 @@ function checkReminders() {
   if (ui.tab === 'today') render();
 }
 
+/* ----------------------------- updates -------------------------------- */
+
+const upd = { reg: null, ready: false, info: null, lastCheck: 0 };
+
+function updateBanner() {
+  if (!upd.ready) return '';
+  const notes = upd.info && upd.info.notes ? `<br><span class="small">${esc(upd.info.notes)}</span>` : '';
+  return `<div class="banner update">⬆️<div class="grow"><b>Update available${upd.info ? ' · v' + esc(upd.info.version) : ''}</b>${notes}
+    <br><button class="btn small" data-act="update" style="margin-top:8px">Install update</button></div></div>`;
+}
+
+function markUpdateReady(info) {
+  if (info) upd.info = info;
+  if (upd.ready) return;
+  upd.ready = true;
+  if (ui.tab === 'today' || ui.tab === 'settings') render();
+}
+
+async function setupUpdates() {
+  if (EMBEDDED || !('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const hadController = !!navigator.serviceWorker.controller;
+  try { upd.reg = await navigator.serviceWorker.register('sw.js'); }
+  catch (e) { console.warn('SW failed', e); return; }
+
+  // A new version has finished downloading in the background.
+  const watch = w => {
+    if (!w) return;
+    const check = () => { if (w.state === 'installed' && navigator.serviceWorker.controller) markUpdateReady(); };
+    check();
+    w.addEventListener('statechange', check);
+  };
+  if (upd.reg.waiting && hadController) markUpdateReady();
+  watch(upd.reg.installing);
+  upd.reg.addEventListener('updatefound', () => watch(upd.reg.installing));
+
+  // Once the new version takes over, reload into it.
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+  checkForUpdate();
+}
+
+async function checkForUpdate(manual = false) {
+  upd.lastCheck = Date.now();
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    const info = await res.json();
+    if (info.version !== APP_VERSION) {
+      markUpdateReady(info);
+      if (upd.reg) upd.reg.update().catch(() => {});
+    } else if (manual) {
+      toast('You’re on the latest version');
+    }
+  } catch (e) {
+    if (manual) toast('Couldn’t check for updates — are you online?');
+  }
+}
+
+async function installUpdate() {
+  toast('Installing update…');
+  const reg = upd.reg;
+  setTimeout(() => location.reload(), 8000); // safety net
+  if (!reg) { location.reload(); return; }
+  try { await reg.update(); } catch (e) { /* offline or already up to date */ }
+  let w = reg.waiting;
+  if (!w && reg.installing) {
+    const i = reg.installing;
+    w = await new Promise(resolve => i.addEventListener('statechange', () => {
+      if (i.state === 'installed') resolve(i);
+      else if (i.state === 'redundant') resolve(null);
+    }));
+  }
+  if (w) w.postMessage('skipWaiting'); // controllerchange → reload
+  else location.reload();
+}
+
 /* ------------------------------- boot --------------------------------- */
 
 function applyTheme() {
@@ -1088,6 +1176,7 @@ function onWake() {
     render();
   }
   checkReminders();
+  if (Date.now() - upd.lastCheck > 10 * 60000) checkForUpdate();
 }
 
 applyTheme();
@@ -1097,7 +1186,5 @@ checkReminders();
 setInterval(onWake, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) onWake(); });
 
-if (!EMBEDDED && 'serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW failed', e));
-}
+setupUpdates();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

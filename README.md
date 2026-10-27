@@ -56,6 +56,13 @@ When the app is open, or you open it after a reminder time, it also shows an
 "Evening check-in" banner. If you allow notifications, it shows a notification
 listing what's still unticked.
 
+## Updates
+
+The app checks for a new version each time you open it. When there is one, a
+**Update available** banner appears with an **Install update** button, which
+installs it and reloads the app within a second or two. Your habits are not
+affected. You can also check manually in **Settings → App version**.
+
 ## Your data
 
 - Everything is stored in the app's storage on this device. Nothing is uploaded.
@@ -68,7 +75,8 @@ listing what's still unticked.
 index.html            page shell
 styles.css            styling (light + dark)
 app.js                all app logic
-sw.js                 service worker – caches the app for offline use
+sw.js                 service worker – offline copy + installing updates
+version.json          current version number and release notes
 manifest.webmanifest  install metadata
 icons/                app icons
 reminders/*.ics       ready-made daily calendar reminders (6 PM, 8 PM, both)

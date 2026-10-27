@@ -108,6 +108,7 @@ main { padding: 4px 16px 24px; max-width: 640px; margin: 0 auto; outline: none; 
   margin: 12px 0; display: flex; gap: 10px; align-items: flex-start;
 }
 .banner.good { background: var(--good-soft); }
+.banner.update { background: var(--accent-soft); }
 
 .habit {
   display: flex; align-items: center; gap: 12px; padding: 10px 4px;
