@@ -775,7 +775,13 @@ $('#view').addEventListener('click', e => {
   const a = el.dataset.act;
   const h = el.dataset.id && state.habits.find(x => x.id === el.dataset.id);
   switch (a) {
-    case 'toggle': setDone(h, el.dataset.k, !isDone(h, el.dataset.k)); haptic(); celebrate(); render(); break;
+    case 'toggle': {
+      const k = el.dataset.k, on = !isDone(h, k);
+      const r = el.getBoundingClientRect();
+      setDone(h, k, on); haptic(); render();
+      if (on) cheer(h, k, r.left + r.width / 2, r.top + r.height / 2);
+      break;
+    }
     case 'edit': openEditor(h.id); break;
     case 'add': openEditor(); break;
     case 'day': ui.date = keyOf(addDays(parseKey(ui.date), +el.dataset.n)); render(); break;
@@ -865,10 +871,101 @@ function openPasteRestore() {
   m.showModal();
 }
 
-function celebrate() {
-  if (ui.tab !== 'today' || ui.date !== todayKey()) return;
-  const daily = byFreq('daily').filter(h => scheduledOn(h, today()));
-  if (daily.length && daily.every(h => isDone(h, ui.date))) toast('🎉 All daily habits done!');
+/* --------------------------- celebration ------------------------------ */
+
+const PRAISE = ['Nice one!', 'Well done!', 'Great job!', 'Keep it up!', 'You did it!', 'Way to go!', 'Another one done!', 'Proud of you!'];
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* Congratulate after a habit is ticked: pop the check, burst confetti, say something nice. */
+function cheer(h, k, x, y) {
+  const d = parseKey(k);
+  const daily = byFreq('daily').filter(x => scheduledOn(x, d));
+  const allDone = h.freq === 'daily' && daily.length > 1 && daily.every(x => isDone(x, k));
+  let msg = `✅ ${pick(PRAISE)}`;
+  let big = false;
+  if (h.freq !== 'daily') {
+    const p = periodOf(h, d);
+    if (countBetween(h, p.start, p.end) === targetOf(h)) {
+      msg = `🎯 ${h.freq === 'weekly' ? 'Weekly' : 'Monthly'} goal reached!`;
+      big = true;
+    }
+  } else if (k === todayKey()) {
+    const s = streaks(h).current;
+    if (s > 1) msg = `🔥 ${s}-day streak! ${pick(PRAISE)}`;
+  }
+  if (allDone) msg = k === todayKey() ? '🎉 All daily habits done today!' : '🎉 Every daily habit done that day!';
+
+  const btn = document.querySelector(`[data-act="toggle"][data-id="${h.id}"][data-k="${k}"]`);
+  if (btn) btn.classList.add('pop');
+  toast(msg);
+  if (navigator.vibrate) navigator.vibrate(allDone ? [20, 60, 20, 60, 40] : 15);
+  if (reduceMotion()) return;
+  confetti(x, y, big ? 70 : 32, [h.color, '#ffd166', '#06d6a0', '#ef476f', '#118ab2']);
+  if (allDone) setTimeout(() => rainConfetti(), 150);
+}
+
+let fx = null, parts = [], fxRunning = false;
+
+function fxCanvas() {
+  if (!fx) {
+    fx = document.createElement('canvas');
+    fx.className = 'fx';
+    document.body.appendChild(fx);
+  }
+  const dpr = window.devicePixelRatio || 1;
+  if (fx.width !== innerWidth * dpr || fx.height !== innerHeight * dpr) {
+    fx.width = innerWidth * dpr; fx.height = innerHeight * dpr;
+  }
+  return fx;
+}
+
+function confetti(x, y, n, colors) {
+  fxCanvas();
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.4;
+    const v = 4 + Math.random() * 7;
+    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, g: 0.28, life: 0, max: 60 + Math.random() * 30,
+      w: 5 + Math.random() * 5, h: 3 + Math.random() * 4, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+      c: pick(colors), round: Math.random() < 0.3 });
+  }
+  runFx();
+}
+
+function rainConfetti() {
+  fxCanvas();
+  const colors = COLORS.concat(['#ffd166', '#06d6a0']);
+  for (let i = 0; i < 140; i++) {
+    parts.push({ x: Math.random() * innerWidth, y: -20 - Math.random() * innerHeight * 0.5,
+      vx: (Math.random() - 0.5) * 2, vy: 2 + Math.random() * 3, g: 0.05, life: 0, max: 200,
+      w: 6 + Math.random() * 6, h: 4 + Math.random() * 4, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3,
+      c: pick(colors), round: Math.random() < 0.3, sway: Math.random() * 6 });
+  }
+  runFx();
+}
+
+function runFx() {
+  if (fxRunning) return;
+  fxRunning = true;
+  const ctx = fx.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const step = () => {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, innerWidth, innerHeight);
+    parts = parts.filter(p => p.life < p.max && p.y < innerHeight + 30);
+    for (const p of parts) {
+      p.life++; p.vy += p.g; p.vx *= 0.99; p.x += p.vx + (p.sway ? Math.sin(p.life / 12) * 0.6 : 0); p.y += p.vy; p.r += p.vr;
+      ctx.globalAlpha = Math.min(1, (p.max - p.life) / 20);
+      ctx.fillStyle = p.c;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r);
+      if (p.round) { ctx.beginPath(); ctx.arc(0, 0, p.h / 1.5, 0, Math.PI * 2); ctx.fill(); }
+      else ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    if (parts.length) requestAnimationFrame(step);
+    else { ctx.clearRect(0, 0, innerWidth, innerHeight); fxRunning = false; }
+  };
+  requestAnimationFrame(step);
 }
 
 /* ------------------------------ backup -------------------------------- */
