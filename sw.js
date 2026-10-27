@@ -1,5 +1,5 @@
 /* Service worker: caches the whole app so it opens with no internet at all. */
-const CACHE = 'habits-v1';
+const CACHE = 'habits-v2';
 const FILES = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png',

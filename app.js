@@ -273,6 +273,15 @@ function habitRow(h, d, opts = {}) {
     const s = streaks(h).current;
     if (s > 1) meta = `🔥 ${s}-day streak${h.area ? ' · ' + esc(h.area) : ''}`;
   }
+  if (opts.offDay) {
+    const order = [...Array(7)].map((_, i) => (i + state.settings.weekStart) % 7);
+    meta = `Due ${order.filter(i => (h.days || []).includes(i)).map(i => DOW[i]).join(' · ')}`;
+    return `<div class="habit offday">
+    ${emojiBox(h)}
+    <div class="grow"><div class="name">${esc(h.name)}</div><div class="meta">${meta}</div></div>
+    <button class="more" data-act="edit" data-id="${h.id}" aria-label="Edit ${esc(h.name)}">⋯</button>
+  </div>`;
+  }
   const disabled = opts.future ? 'disabled' : '';
   return `<div class="habit ${on ? 'done' : ''}">
     ${emojiBox(h)}
@@ -288,6 +297,7 @@ function viewToday() {
   const isToday = ui.date === todayKey();
   const future = d > today();
   const daily = byFreq('daily').filter(h => scheduledOn(h, d));
+  const offDay = byFreq('daily').filter(h => keyOf(d) >= h.created && !scheduledOn(h, d));
   const weekly = byFreq('weekly').filter(h => keyOf(periodOf(h, d).end) >= h.created);
   const monthly = byFreq('monthly').filter(h => keyOf(periodOf(h, d).end) >= h.created);
   const done = daily.filter(h => isDone(h, ui.date)).length;
@@ -311,16 +321,17 @@ function viewToday() {
     <div><div style="font-size:20px;font-weight:700">${done} of ${daily.length} daily habits</div>
     <div class="muted small">${daily.length && done === daily.length ? 'Everything done — great day!' : future ? 'This day hasn’t happened yet.' : 'Tap the circle to tick, tap again to untick.'}</div></div></div>`;
 
-  const section = (title, list, hint) => {
+  const section = (title, list, hint, offDay = false) => {
     if (!list.length) return '';
     return `<div class="section-title"><span>${title}</span><span>${hint || ''}</span></div>
-      <div class="card">${list.map(h => habitRow(h, d, { future })).join('')}</div>`;
+      <div class="card">${list.map(h => habitRow(h, d, { future, offDay })).join('')}</div>`;
   };
 
   if (!active().length) {
     html += `<div class="card empty">No habits yet.<br><button class="btn" data-act="add" style="margin-top:10px">Add your first habit</button></div>`;
   }
   html += section('Daily', daily);
+  html += section(`Daily · not due ${isToday ? 'today' : 'this day'}`, offDay, '', true);
   html += section('Weekly goals', weekly, 'tick on days you do them');
   html += section('Monthly goals', monthly, 'tick on days you do them');
 
