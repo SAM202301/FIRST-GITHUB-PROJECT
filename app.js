@@ -7,6 +7,9 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
+// True when running inside another page (e.g. the hosted claude.ai copy),
+// where downloads, notifications and offline caching are unavailable.
+const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
 const DAY = 86400000;
 
 const EMOJIS = ['💧','🏃','📖','🧘','💪','🥗','😴','🦷','💊','🙏','✍️','🎯','💰','🧹','📵','🚶','🎸','🧠','🌱','☀️','❤️','📞','🍎','🚭'];
@@ -182,6 +185,23 @@ function toast(msg) {
   t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+/* In-app confirmation sheet (window.confirm isn't available everywhere). */
+function ask(msg, okLabel = 'OK', danger = false) {
+  return new Promise(resolve => {
+    const d = $('#confirm');
+    d.innerHTML = `<div class="sheet"><p style="margin:0;font-size:17px">${esc(msg)}</p>
+      <div class="sheet-actions"><button class="btn secondary" value="no">Cancel</button>
+      <button class="btn ${danger ? 'danger' : ''}" value="yes">${esc(okLabel)}</button></div></div>`;
+    d.onclick = e => {
+      const b = e.target.closest('button');
+      if (!b && e.target !== d) return;
+      d.close();
+      resolve(!!b && b.value === 'yes');
+    };
+    d.showModal();
+  });
 }
 
 function haptic() { if (navigator.vibrate) navigator.vibrate(10); }
@@ -577,11 +597,13 @@ function tipFor(h) {
 
 function viewSettings() {
   const s = state.settings;
-  const notifState = !('Notification' in window) ? 'unsupported' : Notification.permission;
+  const notifState = EMBEDDED || !('Notification' in window) ? 'unsupported' : Notification.permission;
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 
   let html = '';
-  if (!standalone) {
+  if (EMBEDDED) {
+    html += `<div class="banner">ℹ️<div><b>You’re using the hosted copy</b><br><span class="small">Your habits are saved in this browser on this phone. For the best experience, add this page to your Home Screen (Share → Add to Home Screen), always open it from there, and copy a backup every week or so (Settings → Your data).</span></div></div>`;
+  } else if (!standalone) {
     html += `<div class="banner">📲<div><b>Install it on your Home Screen</b><br><span class="small">In Safari tap the Share button → <b>Add to Home Screen</b>. It then opens full-screen, works offline and keeps its data on this phone.</span></div></div>`;
   }
 
@@ -601,21 +623,21 @@ function viewSettings() {
     <label class="switch"><input type="checkbox" ${r.on ? 'checked' : ''} data-act="remon" data-i="${i}"><i></i></label>
     <button class="more" data-act="remdel" data-i="${i}" aria-label="Remove reminder">✕</button></div>`).join('');
   html += `<button class="btn secondary block" data-act="remadd">＋ Add reminder time</button>
-    <p class="small muted">iPhones pause web apps in the background, so to get a reminder <b>even when the app is closed</b>, set up one of the two options below once. Both run entirely on your phone.</p>
-    <button class="btn block" data-act="ics">📅 Add reminders to Calendar</button>
+    <p class="small muted">iPhones pause web apps in the background, so to get a reminder <b>even when the app is closed</b>, set up ${EMBEDDED ? 'the Shortcuts automation below once. It' : 'one of the two options below once. Both'} run${EMBEDDED ? 's' : ''} entirely on your phone.</p>
+    ${EMBEDDED ? '' : `<button class="btn block" data-act="ics">📅 Add reminders to Calendar</button>
     <details class="guide"><summary>How the Calendar option works</summary>
       <ol><li>Tap the button above. A calendar file with a daily repeating event (with an alert) for each reminder time is created.</li>
       <li>Choose <b>Add All</b> to put them into your iPhone Calendar.</li>
       <li>Every day at those times your phone will alert you: “Habit check-in”.</li>
       <li>If the button doesn’t open Calendar, open this app’s website in Safari and tap one of these ready-made files:
-        <a href="reminders/6pm-and-8pm.ics">6 PM + 8 PM</a> · <a href="reminders/6pm.ics">6 PM</a> · <a href="reminders/8pm.ics">8 PM</a>.</li></ol></details>
-    <details class="guide"><summary>Or: use the Shortcuts app (most reliable)</summary>
+        <a href="reminders/6pm-and-8pm.ics">6 PM + 8 PM</a> · <a href="reminders/6pm.ics">6 PM</a> · <a href="reminders/8pm.ics">8 PM</a>.</li></ol></details>`}
+    <details class="guide" ${EMBEDDED ? 'open' : ''}><summary>${EMBEDDED ? 'Set up reminders with the Shortcuts app' : 'Or: use the Shortcuts app (most reliable)'}</summary>
       <ol><li>Open the <b>Shortcuts</b> app → <b>Automation</b> tab → <b>＋</b> → <b>Time of Day</b>.</li>
       <li>Set <b>6:00 PM</b>, <b>Daily</b>, and choose <b>Run Immediately</b>. Tap Next.</li>
       <li>Add the action <b>Show Notification</b> with text such as “Time to tick your habits ✅”. Done.</li>
       <li>Repeat for <b>8:00 PM</b> if you want a second nudge.</li></ol></details>
     <div class="list-item" style="margin-top:6px"><span class="grow">In-app alerts while the app is open<br>
-      <span class="small muted">${notifState === 'granted' ? 'Allowed' : notifState === 'denied' ? 'Blocked in iOS Settings' : notifState === 'unsupported' ? 'Install to Home Screen first' : 'Not enabled yet'}</span></span>
+      <span class="small muted">${notifState === 'granted' ? 'Allowed' : notifState === 'denied' ? 'Blocked in iOS Settings' : notifState === 'unsupported' ? (EMBEDDED ? 'Shown as a banner on the Today screen' : 'Install to Home Screen first') : 'Not enabled yet'}</span></span>
       ${notifState === 'default' ? '<button class="btn small" data-act="notify">Enable</button>' : notifState === 'granted' ? '<button class="btn small secondary" data-act="testnotify">Test</button>' : ''}</div>
   </div>`;
 
@@ -628,9 +650,13 @@ function viewSettings() {
 
   const lb = s.lastBackup ? `Last backup: ${fmtShort(new Date(s.lastBackup))}` : 'No backup yet';
   html += `<div class="section-title"><span>Your data</span></div><div class="card">
-    <p class="small muted" style="margin-top:0">Everything is stored only on this phone. Nothing is uploaded. Save a backup now and then (e.g. to the Files app) so you can restore it if you ever delete the app or change phones. ${lb}.</p>
-    <button class="btn block" data-act="export">💾 Save backup</button>
-    <button class="btn secondary block" data-act="import">📂 Restore from backup</button>
+    <p class="small muted" style="margin-top:0">Your habits are stored only on this phone. ${EMBEDDED
+      ? 'Copy a backup now and then and paste it into a note, so you can restore it if this browser’s data is ever cleared.'
+      : 'Save a backup now and then (e.g. to the Files app) so you can restore it if you ever delete the app or change phones.'} ${lb}.</p>
+    <button class="btn block" data-act="export">💾 ${EMBEDDED ? 'Copy backup' : 'Save backup'}</button>
+    ${EMBEDDED
+      ? '<button class="btn secondary block" data-act="paste">📋 Restore by pasting a backup</button>'
+      : '<button class="btn secondary block" data-act="import">📂 Restore from backup</button><button class="btn secondary block" data-act="paste">📋 Restore by pasting backup text</button>'}
     <button class="btn danger block" data-act="reset">Erase all data</button>
   </div>
   <p class="center small muted">Habits · works offline · v1.0</p>`;
@@ -704,10 +730,11 @@ function openEditor(id) {
     else if (b.dataset.x === 'cancel') m.close();
     else if (b.dataset.x === 'archive') { existing.archived = !existing.archived; save(); m.close(); render(); toast(existing.archived ? 'Archived' : 'Restored'); }
     else if (b.dataset.x === 'delete') {
-      if (confirm(`Delete “${existing.name}” and all its history?`)) {
+      ask(`Delete “${existing.name}” and all its history?`, 'Delete', true).then(ok => {
+        if (!ok) return;
         state.habits = state.habits.filter(x => x.id !== existing.id);
         delete state.log[existing.id]; save(); m.close(); render(); toast('Deleted');
-      }
+      });
     }
   };
   m.onsubmit = e => {
@@ -761,10 +788,12 @@ $('#view').addEventListener('click', e => {
     case 'ics': downloadICS(); break;
     case 'export': exportData(); break;
     case 'import': $('#importFile').click(); break;
+    case 'paste': openPasteRestore(); break;
     case 'reset':
-      if (confirm('Erase ALL habits and history from this phone? This cannot be undone.') && confirm('Are you sure?')) {
+      ask('Erase ALL habits and history from this phone? This cannot be undone.', 'Erase everything', true).then(ok => {
+        if (!ok) return;
         state = defaultState(); save(); render(); toast('All data erased');
-      }
+      });
       break;
   }
 });
@@ -792,17 +821,38 @@ $('#importFile').addEventListener('change', async e => {
   const f = e.target.files[0];
   e.target.value = '';
   if (!f) return;
-  try {
-    const data = JSON.parse(await f.text());
-    if (!Array.isArray(data.habits) || typeof data.log !== 'object') throw new Error('Not a Habits backup');
-    if (!confirm(`Restore backup with ${data.habits.length} habits? This replaces what’s on this phone now.`)) return;
-    const d = defaultState();
-    state = { ...d, ...data, settings: { ...d.settings, ...(data.settings || {}) } };
-    save(); render(); toast('Backup restored');
-  } catch (err) {
-    alert('That file could not be restored: ' + err.message);
-  }
+  restoreFrom(await f.text());
 });
+
+async function restoreFrom(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+    if (!data || !Array.isArray(data.habits) || typeof data.log !== 'object') throw new Error();
+  } catch (err) {
+    toast('That isn’t a Habits backup');
+    return false;
+  }
+  if (!await ask(`Restore backup with ${plural(data.habits.length, 'habit')}? This replaces what’s on this phone now.`, 'Restore')) return false;
+  const d = defaultState();
+  state = { ...d, ...data, settings: { ...d.settings, ...(data.settings || {}) } };
+  save(); render(); toast('Backup restored');
+  return true;
+}
+
+function openPasteRestore() {
+  const m = $('#modal');
+  m.innerHTML = `<form class="sheet"><h2>Restore from backup</h2>
+    <p class="small muted">Paste the backup text you copied earlier.</p>
+    <textarea id="pasteBackup" class="note" style="min-height:140px" placeholder='{"version":1, ...}'></textarea>
+    <div class="sheet-actions"><button type="button" class="btn secondary" data-x="cancel">Cancel</button><button type="submit" class="btn">Restore</button></div></form>`;
+  m.onclick = e => { if (e.target === m || e.target.dataset.x === 'cancel') m.close(); };
+  m.onsubmit = async e => {
+    e.preventDefault();
+    if (await restoreFrom(m.querySelector('#pasteBackup').value)) m.close();
+  };
+  m.showModal();
+}
 
 function celebrate() {
   if (ui.tab !== 'today' || ui.date !== todayKey()) return;
@@ -815,6 +865,16 @@ function celebrate() {
 async function exportData() {
   state.settings.lastBackup = Date.now();
   save();
+  if (EMBEDDED) {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(state));
+      toast('Backup copied — paste it into Notes to keep it safe');
+    } catch (e) {
+      toast('Couldn’t copy the backup on this device');
+    }
+    render();
+    return;
+  }
   const name = `habits-backup-${todayKey()}.json`;
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const file = new File([blob], name, { type: 'application/json' });
@@ -862,7 +922,7 @@ function downloadICS() {
 }
 
 async function enableNotifications() {
-  if (!('Notification' in window)) { alert('Notifications need the app to be added to your Home Screen first (iOS 16.4 or newer).'); return; }
+  if (!('Notification' in window)) { toast('Add the app to your Home Screen first (iOS 16.4+)'); return; }
   const p = await Notification.requestPermission();
   toast(p === 'granted' ? 'Notifications enabled' : 'Notifications not allowed');
   render();
@@ -929,7 +989,7 @@ checkReminders();
 setInterval(onWake, 30000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) onWake(); });
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+if (!EMBEDDED && 'serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW failed', e));
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
