@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.5.2'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.3'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -664,7 +664,8 @@ function viewSettings() {
         <div class="list-item"><span class="grow">Lock the app now</span><button class="btn small secondary" data-act="locknow">Lock now</button></div>
         <div class="list-item"><span class="grow">${lock.credId ? 'Face ID not working?' : 'Unlock with Face ID'}<br>
           <span class="small muted">${lock.credId ? 'Use this if you deleted the Habits passkey' : 'Currently PIN only'}</span></span>
-          <button class="btn small secondary" data-act="refaceid">${lock.credId ? 'Set up again' : 'Add Face ID'}</button></div>` : ''}
+          <button class="btn small secondary" data-act="refaceid">${lock.credId ? 'Set up again' : 'Add Face ID'}</button></div>
+        <div class="list-item"><span class="grow">Backup PIN</span><button class="btn small secondary" data-act="changepin">Change</button></div>` : ''}
       <p class="small muted">${lock
         ? 'Habits asks for Face ID each time you open it. Face ID works through a passkey saved in your iPhone’s Passwords app (listed under sam202301.github.io), so please keep it. If that isn’t available, use your backup PIN.'
         : 'Ask for Face ID or Touch ID whenever Habits is opened, so nobody else can see your habits.'}</p></div>`;
@@ -832,6 +833,7 @@ $('#view').addEventListener('click', e => {
     case 'update': installUpdate(); break;
     case 'locknow': showLock(); break;
     case 'refaceid': setupFaceIdAgain(); break;
+    case 'changepin': openPinChange(); break;
     case 'checkupdate': checkForUpdate(true); break;
     case 'reset':
       ask('Erase ALL habits and history from this phone? This cannot be undone.', 'Erase everything', true).then(ok => {
@@ -1222,16 +1224,40 @@ async function biometricAvailable() {
   } catch (e) { return false; }
 }
 
-function createPasskey() {
+/* The same user id each time, so setting Face ID up again replaces the
+   passkey in the Passwords app instead of adding another one. */
+function createPasskey(userId) {
   return navigator.credentials.create({ publicKey: {
     rp: { name: 'Habits', id: location.hostname },
-    user: { id: randomBytes(16), name: 'Habits app lock', displayName: 'Habits app lock' },
+    user: { id: unb64u(userId), name: 'Habits app lock', displayName: 'Habits app lock' },
     challenge: randomBytes(32),
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
     authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
     attestation: 'none',
     timeout: 60000,
   } });
+}
+
+/* Byte 32 of a passkey's authenticator data holds its flags; 0x04 means the
+   iPhone checked Face ID, Touch ID or the phone's passcode. */
+function userVerified(response) {
+  let data = null;
+  if (response.authenticatorData) data = response.authenticatorData;
+  else if (response.getAuthenticatorData) data = response.getAuthenticatorData();
+  else {
+    // Older iOS: dig authData out of the CBOR attestation object.
+    const a = new Uint8Array(response.attestationObject);
+    const key = [0x68, ...new TextEncoder().encode('authData')];
+    for (let i = 0; i + key.length < a.length && !data; i++) {
+      if (!key.every((byte, j) => a[i + j] === byte)) continue;
+      let k = i + key.length, len;
+      if (a[k] === 0x58) { len = a[k + 1]; k += 2; }
+      else if (a[k] === 0x59) { len = (a[k + 1] << 8) | a[k + 2]; k += 3; }
+      else break;
+      data = a.slice(k, k + len);
+    }
+  }
+  return !!data && (new Uint8Array(data)[32] & 0x04) !== 0;
 }
 
 async function openLockSetup() {
@@ -1255,15 +1281,16 @@ async function openLockSetup() {
     if (!/^\d{4,8}$/.test(p1)) { msg('The PIN must be 4 to 8 digits.'); return; }
     if (p1 !== p2) { msg('The two PINs don’t match.'); return; }
     let credId = null;
+    const userId = b64u(randomBytes(16));
     if (bio) {
       // Called straight from the tap, as iOS requires for Face ID.
       pauseLock(120000);
-      try { credId = b64u((await createPasskey()).rawId); }
+      try { credId = b64u((await createPasskey(userId)).rawId); }
       catch (err) { msg(err.name === 'NotAllowedError' ? 'Face ID setup was cancelled. Tap Turn on to try again.' : 'Face ID couldn’t be set up: ' + err.message); return; }
       finally { pauseLock(3000); }
     }
     const salt = b64u(randomBytes(16));
-    lock = { credId, salt, pinHash: await hashPin(p1, salt), after: 0, fails: 0, until: 0 };
+    lock = { credId, userId, salt, pinHash: await hashPin(p1, salt), after: 0, fails: 0, until: 0 };
     saveLock();
     m.close(); render(); toast('App lock is on');
   };
@@ -1274,7 +1301,8 @@ async function openLockSetup() {
 async function setupFaceIdAgain() {
   pauseLock(120000);
   try {
-    lock.credId = b64u((await createPasskey()).rawId);
+    lock.userId ||= b64u(randomBytes(16));
+    lock.credId = b64u((await createPasskey(lock.userId)).rawId);
     saveLock();
     render();
     toast('Face ID is set up again');
@@ -1283,6 +1311,51 @@ async function setupFaceIdAgain() {
   } finally {
     pauseLock(3000);
   }
+}
+
+/* Locked out (passkey deleted, PIN forgotten): the iPhone itself confirms it's
+   you with Face ID or its passcode while making a new passkey. Anyone who can
+   do that already has full use of the phone, so this keeps the lock as strong. */
+async function recoverWithIphone() {
+  if (!window.PublicKeyCredential) { lockMsg('This iPhone can’t confirm it’s you here. Use your PIN.'); return; }
+  pauseLock(120000);
+  try {
+    lock.userId ||= b64u(randomBytes(16));
+    const cred = await createPasskey(lock.userId);
+    if (!userVerified(cred.response)) throw new Error('not verified');
+    lock.credId = b64u(cred.rawId);
+    lock.fails = 0; lock.until = 0;
+    saveLock();
+    unlockDone();
+    toast('Unlocked — Face ID is set up again');
+  } catch (err) {
+    lockMsg(err.name === 'NotAllowedError' ? 'Cancelled. Tap “Can’t unlock?” to try again.' : 'Your iPhone couldn’t confirm it’s you. Try again.');
+  } finally {
+    pauseLock(3000);
+  }
+}
+
+function openPinChange() {
+  const m = $('#modal');
+  const pinInput = (id, label) => `<div class="field"><label for="${id}">${label}</label>
+    <input type="password" id="${id}" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" class="pin-input"></div>`;
+  m.innerHTML = `<form class="sheet"><h2>Change backup PIN</h2>
+    ${pinInput('pin1', 'New PIN (4–8 digits)')}${pinInput('pin2', 'Type the new PIN again')}
+    <p class="small" id="lockSetupMsg" style="color:var(--bad)"></p>
+    <div class="sheet-actions"><button type="button" class="btn secondary" data-x="cancel">Cancel</button><button type="submit" class="btn">Save PIN</button></div></form>`;
+  const msg = t => { m.querySelector('#lockSetupMsg').textContent = t; };
+  m.onclick = e => { if (e.target === m || e.target.dataset.x === 'cancel') m.close(); };
+  m.onsubmit = async e => {
+    e.preventDefault();
+    const p1 = m.querySelector('#pin1').value, p2 = m.querySelector('#pin2').value;
+    if (!/^\d{4,8}$/.test(p1)) { msg('The PIN must be 4 to 8 digits.'); return; }
+    if (p1 !== p2) { msg('The two PINs don’t match.'); return; }
+    lock.salt = b64u(randomBytes(16));
+    lock.pinHash = await hashPin(p1, lock.salt);
+    saveLock();
+    m.close(); toast('Backup PIN changed');
+  };
+  m.showModal();
 }
 
 function disableLock() {
@@ -1313,6 +1386,7 @@ function showLock(tryBiometric = false) {
       <button class="btn ${lock.credId ? 'secondary' : ''} block" type="submit">Unlock with PIN</button></form>
     <p class="small" id="lockMsg" role="alert"></p>
     ${lock.credId ? '<button class="linkbtn" data-lock="usepin">Use PIN instead</button>' : ''}
+    ${afterUnlock ? '' : '<button class="linkbtn small" data-lock="recover">Can’t unlock? Use your iPhone</button>'}
     ${afterUnlock ? '<button class="btn secondary block" data-lock="cancel">Cancel</button>' : ''}
   </div>`;
   if (tryBiometric && lock.credId) unlockBiometric(true);
@@ -1400,6 +1474,7 @@ $('#lock').addEventListener('click', e => {
   }
   if (b.dataset.lock === 'bio') unlockBiometric();
   else if (b.dataset.lock === 'usepin') showPinEntry(true);
+  else if (b.dataset.lock === 'recover') recoverWithIphone();
   else if (b.dataset.lock === 'cancel') { afterUnlock = null; unlockDone(); }
 });
 $('#lock').addEventListener('submit', e => {

@@ -4,7 +4,10 @@
 
    RELEASING A NEW VERSION: bump VERSION here, APP_VERSION in app.js and
    "version" in version.json (all three must match). */
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
+// true = this release installs by itself, even if the app is locked or the
+// "Install update" button can't be reached. Use it for fixes people can't wait for.
+const INSTALL_IMMEDIATELY = true;
 const CACHE = 'habits-' + VERSION;
 const FILES = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
@@ -19,7 +22,7 @@ self.addEventListener('install', e => {
     // cache: 'reload' skips the browser's HTTP cache so we never store a stale file.
     await cache.addAll(FILES.map(f => new Request(f, { cache: 'reload' })));
     // Older versions have no update button, so move them over straight away.
-    if ((await caches.keys()).some(k => LEGACY.test(k))) self.skipWaiting();
+    if (INSTALL_IMMEDIATELY || (await caches.keys()).some(k => LEGACY.test(k))) self.skipWaiting();
   })());
 });
 

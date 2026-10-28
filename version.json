@@ -1,4 +1,4 @@
 {
-  "version": "1.5.2",
-  "notes": "Habits are now edited from the Today screen, and you can set Face ID up again in Settings → App lock."
+  "version": "1.5.3",
+  "notes": "Locked out? The lock screen can now unlock with your iPhone’s Face ID or passcode, and you can change your backup PIN."
 }
