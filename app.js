@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.5.4'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.5'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -223,6 +223,20 @@ function emojiBox(h) {
 /* ------------------------------ router -------------------------------- */
 
 const ui = { tab: 'today', date: todayKey(), weekOf: todayKey(), monthOf: todayKey(), range: 30 };
+
+/* iPhone can keep the app in memory for days, so check the date often and
+   move "today" (and this week / this month) forward after midnight.
+   Returns true when the day changed. */
+let lastDay = todayKey();
+function rollover() {
+  const t = todayKey();
+  if (t === lastDay) return false;
+  if (ui.date === lastDay) ui.date = t;
+  if (ui.weekOf === lastDay) ui.weekOf = t;
+  if (ui.monthOf === lastDay) ui.monthOf = t;
+  lastDay = t;
+  return true;
+}
 const TITLES = { today: 'Today', week: 'This Week', month: 'This Month', stats: 'Progress', settings: 'Settings' };
 
 function go(tab) {
@@ -234,6 +248,7 @@ function go(tab) {
 
 function render() {
   if (locked) return;
+  rollover();
   $('#title').textContent = TITLES[ui.tab];
   $('#addBtn').style.visibility = ui.tab === 'settings' ? 'hidden' : 'visible';
   const v = $('#view');
@@ -800,6 +815,9 @@ $('#addBtn').addEventListener('click', () => openEditor());
 $('#view').addEventListener('click', e => {
   const el = e.target.closest('[data-act]');
   if (!el || el.tagName === 'INPUT' || el.tagName === 'SELECT') return;
+  // The screen may still show yesterday: switch to today instead of acting on
+  // the tap, so a tick meant for today never changes yesterday's record.
+  if (rollover()) { render(); toast('It’s a new day — showing today'); return; }
   const a = el.dataset.act;
   const h = el.dataset.id && state.habits.find(x => x.id === el.dataset.id);
   switch (a) {
@@ -1526,14 +1544,8 @@ function applyTheme() {
   else document.documentElement.setAttribute('data-theme', t);
 }
 
-let lastDay = todayKey();
 function onWake() {
-  // roll over to the new day if the app was left open past midnight
-  if (todayKey() !== lastDay) {
-    if (ui.date === lastDay) ui.date = todayKey();
-    lastDay = todayKey();
-    render();
-  }
+  if (rollover()) render();
   checkReminders();
   if (Date.now() - upd.lastCheck > 10 * 60000) checkForUpdate();
 }
@@ -1544,6 +1556,9 @@ if (locked) showLock(true);
 else { render(); checkReminders(); }
 setInterval(() => { if (!locked) onWake(); }, 30000);
 document.addEventListener('visibilitychange', onVisibility);
+// iPhone doesn't always send visibilitychange to Home Screen apps, so also
+// check when the app regains focus or is shown again.
+for (const ev of ['focus', 'pageshow']) window.addEventListener(ev, () => { if (!locked && !document.hidden) onWake(); });
 
 setupUpdates();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

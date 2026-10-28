@@ -1,4 +1,4 @@
 {
-  "version": "1.5.4",
-  "notes": "Gets you back into the app: app lock is switched off once. You can turn it on again in Settings."
+  "version": "1.5.5",
+  "notes": "Fixes yesterday’s ticks showing on today’s screen — the app now always moves to the new day."
 }
