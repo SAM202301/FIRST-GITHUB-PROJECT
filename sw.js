@@ -4,7 +4,7 @@
 
    RELEASING A NEW VERSION: bump VERSION here, APP_VERSION in app.js and
    "version" in version.json (all three must match). */
-const VERSION = '1.5.3';
+const VERSION = '1.5.4';
 // true = this release installs by itself, even if the app is locked or the
 // "Install update" button can't be reached. Use it for fixes people can't wait for.
 const INSTALL_IMMEDIATELY = true;

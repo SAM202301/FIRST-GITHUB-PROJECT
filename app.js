@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.5.3'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.4'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -313,6 +313,10 @@ function viewToday() {
   </div>`;
 
   html += updateBanner();
+  if (lockWasReset) {
+    html += `<div class="banner update">🔓<div class="grow"><b>You’re back in</b><br><span class="small">App lock was switched off so you could get into your habits. You can turn it on again in Settings → App lock.</span>
+      <br><button class="btn small secondary" data-act="dismissReset" style="margin-top:8px">OK</button></div></div>`;
+  }
   html += reminderBanner();
 
   if (state.firstRun) {
@@ -832,6 +836,7 @@ $('#view').addEventListener('click', e => {
     case 'paste': openPasteRestore(); break;
     case 'update': installUpdate(); break;
     case 'locknow': showLock(); break;
+    case 'dismissReset': lockWasReset = false; render(); break;
     case 'refaceid': setupFaceIdAgain(); break;
     case 'changepin': openPinChange(); break;
     case 'checkupdate': checkForUpdate(true); break;
@@ -1194,6 +1199,19 @@ async function installUpdate() {
    Stored apart from the habit data so backups never carry it. */
 
 const LOCK_KEY = 'habits.lock';
+
+/* One-time rescue (v1.5.4), done at the owner's request: they were locked out
+   with no working way back in, so the lock is switched off once per install.
+   The flag is set on first run, so a lock turned on later is never touched. */
+const LOCK_RESET_FLAG = 'habits.lockReset1';
+let lockWasReset = false;
+try {
+  if (!EMBEDDED && !localStorage.getItem(LOCK_RESET_FLAG)) {
+    if (localStorage.getItem(LOCK_KEY)) { localStorage.removeItem(LOCK_KEY); lockWasReset = true; }
+    localStorage.setItem(LOCK_RESET_FLAG, '1');
+  }
+} catch (e) { /* storage unavailable: nothing to reset */ }
+
 let lock = (() => { try { return EMBEDDED ? null : JSON.parse(localStorage.getItem(LOCK_KEY)); } catch (e) { return null; } })();
 let locked = !!lock;
 let afterUnlock = null; // something to do once the person proves it's them (e.g. turn the lock off)
@@ -1329,7 +1347,11 @@ async function recoverWithIphone() {
     unlockDone();
     toast('Unlocked — Face ID is set up again');
   } catch (err) {
-    lockMsg(err.name === 'NotAllowedError' ? 'Cancelled. Tap “Can’t unlock?” to try again.' : 'Your iPhone couldn’t confirm it’s you. Try again.');
+    // Show what the iPhone actually said, so a failure can be diagnosed.
+    const detail = `${err.name}${err.message ? ': ' + err.message : ''}`;
+    lockMsg(err.name === 'NotAllowedError'
+      ? `Your iPhone didn’t finish saving the passkey (${detail}). If you didn’t cancel, check iCloud Keychain is on: Settings → your name → iCloud → Passwords.`
+      : `Your iPhone couldn’t confirm it’s you (${detail}).`);
   } finally {
     pauseLock(3000);
   }

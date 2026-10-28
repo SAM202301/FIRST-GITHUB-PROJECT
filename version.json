@@ -1,4 +1,4 @@
 {
-  "version": "1.5.3",
-  "notes": "Locked out? The lock screen can now unlock with your iPhone’s Face ID or passcode, and you can change your backup PIN."
+  "version": "1.5.4",
+  "notes": "Gets you back into the app: app lock is switched off once. You can turn it on again in Settings."
 }

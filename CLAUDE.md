@@ -21,7 +21,9 @@ change that should reach the phone:
 
 The app lock (`habits.lock` in localStorage) is kept out of backups. Never add
 a way past it that doesn't require the iPhone's own Face ID or passcode
-(WebAuthn with user verification) or the backup PIN.
+(WebAuthn with user verification) or the backup PIN. The one exception is the
+owner-requested, one-time reset in v1.5.4 (`LOCK_RESET_FLAG` in `app.js`); it
+only ever fires on the first run of that code, so leave the flag logic intact.
 
 User data lives only in the phone's localStorage (`habits.v1`); never change
 its shape without migrating existing data in `load()`.
