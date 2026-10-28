@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.5.0'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.1'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -1289,14 +1289,31 @@ function showLock(tryBiometric = false) {
   el.innerHTML = `<div class="lock-inner">
     <img src="icons/icon-192.png" class="lock-icon" alt="">
     <h2>${afterUnlock ? 'Confirm it’s you' : 'Habits is locked'}</h2>
-    ${lock.credId ? '<button class="btn block" data-lock="bio">Unlock with Face ID / Touch ID</button>' : ''}
-    <form id="pinForm"><input type="password" id="lockPin" inputmode="numeric" pattern="[0-9]*" maxlength="8"
-      autocomplete="off" placeholder="${lock.credId ? 'or enter your PIN' : 'Enter your PIN'}" aria-label="PIN" class="pin-input">
+    ${lock.credId ? `<button class="btn block bio-btn" data-lock="bio">${FACE_ID_ICON}Unlock with Face ID</button>
+      <p class="small muted" id="tapHint">or tap anywhere</p>` : ''}
+    <form id="pinForm" ${lock.credId ? 'hidden' : ''}><input type="password" id="lockPin" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+      autocomplete="off" placeholder="Enter your PIN" aria-label="PIN" class="pin-input">
       <button class="btn ${lock.credId ? 'secondary' : ''} block" type="submit">Unlock with PIN</button></form>
     <p class="small" id="lockMsg" role="alert"></p>
+    ${lock.credId ? '<button class="linkbtn" data-lock="usepin">Use PIN instead</button>' : ''}
     ${afterUnlock ? '<button class="btn secondary block" data-lock="cancel">Cancel</button>' : ''}
   </div>`;
   if (tryBiometric && lock.credId) unlockBiometric(true);
+}
+
+const FACE_ID_ICON = `<svg class="faceid" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+  <path d="M3 8V5.5A2.5 2.5 0 0 1 5.5 3H8M16 3h2.5A2.5 2.5 0 0 1 21 5.5V8M21 16v2.5a2.5 2.5 0 0 1-2.5 2.5H16M8 21H5.5A2.5 2.5 0 0 1 3 18.5V16"/>
+  <path d="M8.5 9v1.5M15.5 9v1.5M12 9v4.5h-1M9 16.2c1.8 1.4 4.2 1.4 6 0"/></svg>`;
+
+/* Reveal the backup PIN box (Face ID stays the main way in). */
+function showPinEntry(focus) {
+  const f = $('#pinForm');
+  if (!f || !f.hidden) return;
+  f.hidden = false;
+  const link = document.querySelector('[data-lock="usepin"]'), hint = $('#tapHint');
+  if (link) link.hidden = true;
+  if (hint) hint.hidden = true;
+  if (focus) $('#lockPin').focus();
 }
 
 function lockMsg(text, shake) {
@@ -1317,7 +1334,10 @@ function unlockDone() {
   checkReminders();
 }
 
+let bioBusy = false;
 async function unlockBiometric(quiet = false) {
+  if (bioBusy) return;
+  bioBusy = true;
   try {
     const cred = await navigator.credentials.get({ publicKey: {
       challenge: randomBytes(32),
@@ -1332,7 +1352,9 @@ async function unlockBiometric(quiet = false) {
     unlockDone();
   } catch (e) {
     // NotAllowedError = cancelled, or iOS wants a tap first; the button is right there.
-    if (!quiet && e.name !== 'NotAllowedError') lockMsg('Face ID didn’t work. Try again or use your PIN.');
+    if (!quiet && e.name !== 'NotAllowedError') { lockMsg('Face ID didn’t work. Try again or use your PIN.'); showPinEntry(false); }
+  } finally {
+    bioBusy = false;
   }
 }
 
@@ -1353,8 +1375,14 @@ async function unlockPin(pin) {
 
 $('#lock').addEventListener('click', e => {
   const b = e.target.closest('[data-lock]');
-  if (!b) return;
+  if (!b) {
+    // Tapping anywhere else starts Face ID, unless the PIN box is in use.
+    const pinOpen = $('#pinForm') && !$('#pinForm').hidden;
+    if (lock && lock.credId && !pinOpen && !e.target.closest('form')) unlockBiometric();
+    return;
+  }
   if (b.dataset.lock === 'bio') unlockBiometric();
+  else if (b.dataset.lock === 'usepin') showPinEntry(true);
   else if (b.dataset.lock === 'cancel') { afterUnlock = null; unlockDone(); }
 });
 $('#lock').addEventListener('submit', e => {

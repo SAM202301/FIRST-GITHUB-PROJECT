@@ -274,6 +274,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 #pinForm { display: flex; flex-direction: column; gap: 8px; }
 .pin-input { width: 100%; text-align: center; font-size: 22px; letter-spacing: .3em; padding: 10px; }
 .pin-input::placeholder { letter-spacing: normal; font-size: 16px; }
+#pinForm[hidden], .lock-inner [hidden] { display: none; }
+.bio-btn { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px; font-size: 17px; }
+.faceid { width: 26px; height: 26px; flex: none; }
+#tapHint { margin: 0; }
+.linkbtn { border: 0; background: none; color: var(--accent); font-weight: 600; padding: 8px; }
 #lockMsg { color: var(--bad); min-height: 1.4em; margin: 0; }
 .shake { animation: shake .35s; }
 @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }

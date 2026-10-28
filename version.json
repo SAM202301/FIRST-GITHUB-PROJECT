@@ -1,4 +1,4 @@
 {
-  "version": "1.5.0",
-  "notes": "New: lock the app with Face ID or Touch ID (Settings → App lock)."
+  "version": "1.5.1",
+  "notes": "Face ID is now the main way to unlock — tap anywhere on the lock screen. Your PIN is still there as a backup."
 }

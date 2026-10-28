@@ -4,7 +4,7 @@
 
    RELEASING A NEW VERSION: bump VERSION here, APP_VERSION in app.js and
    "version" in version.json (all three must match). */
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const CACHE = 'habits-' + VERSION;
 const FILES = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest',
