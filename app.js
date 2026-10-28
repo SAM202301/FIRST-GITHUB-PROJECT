@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.5.1'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.2'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -342,6 +342,13 @@ function viewToday() {
     <div class="card"><div class="mood">${MOODS.map((m, i) =>
       `<button class="${j.mood === i ? 'on' : ''}" data-act="mood" data-i="${i}" aria-label="Mood ${i + 1} of 5">${m}</button>`).join('')}</div>
     <textarea class="note" id="note" placeholder="Notes for the day (optional)">${esc(j.note || '')}</textarea></div>`;
+
+  const archived = state.habits.filter(h => h.archived);
+  if (archived.length) {
+    html += `<details class="archived"><summary>Archived habits (${archived.length})</summary><div class="card">${archived.map(h =>
+      `<div class="list-item"><span style="font-size:22px">${esc(h.emoji)}</span><span class="grow">${esc(h.name)}</span>
+       <button class="btn small secondary" data-act="edit" data-id="${h.id}">Edit</button></div>`).join('')}</div></details>`;
+  }
   return html;
 }
 
@@ -621,15 +628,6 @@ function viewSettings() {
     html += `<div class="banner">📲<div><b>Install it on your Home Screen</b><br><span class="small">In Safari tap the Share button → <b>Add to Home Screen</b>. It then opens full-screen, works offline and keeps its data on this phone.</span></div></div>`;
   }
 
-  html += `<div class="section-title"><span>Habits</span><button class="btn small" data-act="add">＋ Add</button></div><div class="card">`;
-  const list = state.habits.slice().sort((a, b) => a.archived - b.archived);
-  html += list.length ? list.map(h => `<div class="list-item" style="${h.archived ? 'opacity:.5' : ''}">
-    <span style="font-size:22px">${esc(h.emoji)}</span>
-    <div class="grow"><div style="font-weight:600">${esc(h.name)}</div>
-    <div class="small muted">${FREQ_LABEL[h.freq]}${h.freq !== 'daily' ? ` · ${targetOf(h)}× per ${unitOf(h)}` : daysLabel(h)}${h.area ? ' · ' + esc(h.area) : ''}${h.archived ? ' · archived' : ''}</div></div>
-    <button class="btn small secondary" data-act="edit" data-id="${h.id}">Edit</button></div>`).join('')
-    : '<div class="empty">No habits yet.</div>';
-  html += '</div>';
 
   html += `<div class="section-title"><span>Evening reminders</span></div><div class="card">`;
   html += s.reminders.map((r, i) => `<div class="list-item"><span>🔔</span>
@@ -663,9 +661,12 @@ function viewSettings() {
         <label class="switch"><input type="checkbox" data-act="locktoggle" ${lock ? 'checked' : ''} aria-label="App lock"><i></i></label></div>
       ${lock ? `<div class="list-item"><span class="grow">Lock when I leave the app</span>
         <select data-act="lockafter">${afterOpts.map(([v, l]) => `<option value="${v}" ${(lock.after || 0) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-        <div class="list-item"><span class="grow">Lock the app now</span><button class="btn small secondary" data-act="locknow">Lock now</button></div>` : ''}
+        <div class="list-item"><span class="grow">Lock the app now</span><button class="btn small secondary" data-act="locknow">Lock now</button></div>
+        <div class="list-item"><span class="grow">${lock.credId ? 'Face ID not working?' : 'Unlock with Face ID'}<br>
+          <span class="small muted">${lock.credId ? 'Use this if you deleted the Habits passkey' : 'Currently PIN only'}</span></span>
+          <button class="btn small secondary" data-act="refaceid">${lock.credId ? 'Set up again' : 'Add Face ID'}</button></div>` : ''}
       <p class="small muted">${lock
-        ? 'Habits asks for Face ID or Touch ID each time you open it. If that isn’t available, use your backup PIN.'
+        ? 'Habits asks for Face ID each time you open it. Face ID works through a passkey saved in your iPhone’s Passwords app (listed under sam202301.github.io), so please keep it. If that isn’t available, use your backup PIN.'
         : 'Ask for Face ID or Touch ID whenever Habits is opened, so nobody else can see your habits.'}</p></div>`;
   }
 
@@ -830,6 +831,7 @@ $('#view').addEventListener('click', e => {
     case 'paste': openPasteRestore(); break;
     case 'update': installUpdate(); break;
     case 'locknow': showLock(); break;
+    case 'refaceid': setupFaceIdAgain(); break;
     case 'checkupdate': checkForUpdate(true); break;
     case 'reset':
       ask('Erase ALL habits and history from this phone? This cannot be undone.', 'Erase everything', true).then(ok => {
@@ -1266,6 +1268,21 @@ async function openLockSetup() {
     m.close(); render(); toast('App lock is on');
   };
   m.showModal();
+}
+
+/* Replace a deleted or broken passkey. Runs straight from the tap, as iOS requires. */
+async function setupFaceIdAgain() {
+  pauseLock(120000);
+  try {
+    lock.credId = b64u((await createPasskey()).rawId);
+    saveLock();
+    render();
+    toast('Face ID is set up again');
+  } catch (err) {
+    toast(err.name === 'NotAllowedError' ? 'Face ID setup was cancelled' : 'Face ID couldn’t be set up on this device');
+  } finally {
+    pauseLock(3000);
+  }
 }
 
 function disableLock() {

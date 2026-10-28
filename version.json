@@ -1,4 +1,4 @@
 {
-  "version": "1.5.1",
-  "notes": "Face ID is now the main way to unlock — tap anywhere on the lock screen. Your PIN is still there as a backup."
+  "version": "1.5.2",
+  "notes": "Habits are now edited from the Today screen, and you can set Face ID up again in Settings → App lock."
 }

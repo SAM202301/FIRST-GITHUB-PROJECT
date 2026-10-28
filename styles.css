@@ -284,3 +284,5 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 @keyframes shake { 20%, 60% { transform: translateX(-8px); } 40%, 80% { transform: translateX(8px); } }
 @media (prefers-reduced-motion: reduce) { .shake { animation: none; } }
 body.privacy main, body.privacy .topbar { visibility: hidden; }
+details.archived { margin-top: 20px; }
+details.archived summary { color: var(--muted); font-size: 14px; font-weight: 600; padding: 6px 4px; cursor: pointer; }
