@@ -7,7 +7,7 @@
    ========================================================================= */
 
 const STORE_KEY = 'habits.v1';
-const APP_VERSION = '1.4.0'; // keep in step with sw.js and version.json
+const APP_VERSION = '1.5.0'; // keep in step with sw.js and version.json
 // True when running inside another page (e.g. the hosted claude.ai copy),
 // where downloads, notifications and offline caching are unavailable.
 const EMBEDDED = (() => { try { return window.self !== window.top; } catch (e) { return true; } })();
@@ -233,6 +233,7 @@ function go(tab) {
 }
 
 function render() {
+  if (locked) return;
   $('#title').textContent = TITLES[ui.tab];
   $('#addBtn').style.visibility = ui.tab === 'settings' ? 'hidden' : 'visible';
   const v = $('#view');
@@ -654,6 +655,20 @@ function viewSettings() {
       ${notifState === 'default' ? '<button class="btn small" data-act="notify">Enable</button>' : notifState === 'granted' ? '<button class="btn small secondary" data-act="testnotify">Test</button>' : ''}</div>
   </div>`;
 
+  if (!EMBEDDED) {
+    const afterOpts = [[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']];
+    html += `<div class="section-title"><span>App lock</span></div><div class="card">
+      <div class="list-item"><span class="grow">Lock with Face ID / Touch ID<br><span class="small muted">${
+        !lock ? 'Off' : lock.credId ? 'On · backup PIN set' : 'On · PIN only'}</span></span>
+        <label class="switch"><input type="checkbox" data-act="locktoggle" ${lock ? 'checked' : ''} aria-label="App lock"><i></i></label></div>
+      ${lock ? `<div class="list-item"><span class="grow">Lock when I leave the app</span>
+        <select data-act="lockafter">${afterOpts.map(([v, l]) => `<option value="${v}" ${(lock.after || 0) === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="list-item"><span class="grow">Lock the app now</span><button class="btn small secondary" data-act="locknow">Lock now</button></div>` : ''}
+      <p class="small muted">${lock
+        ? 'Habits asks for Face ID or Touch ID each time you open it. If that isn’t available, use your backup PIN.'
+        : 'Ask for Face ID or Touch ID whenever Habits is opened, so nobody else can see your habits.'}</p></div>`;
+  }
+
   html += `<div class="section-title"><span>Preferences</span></div><div class="card">
     <div class="list-item"><span class="grow">Week starts on</span>
       <select data-act="weekstart"><option value="1" ${s.weekStart === 1 ? 'selected' : ''}>Monday</option><option value="0" ${s.weekStart === 0 ? 'selected' : ''}>Sunday</option><option value="6" ${s.weekStart === 6 ? 'selected' : ''}>Saturday</option></select></div>
@@ -811,9 +826,10 @@ $('#view').addEventListener('click', e => {
     case 'testnotify': notify('Habit check-in', 'This is how your reminder will look.'); break;
     case 'ics': downloadICS(); break;
     case 'export': exportData(); break;
-    case 'import': $('#importFile').click(); break;
+    case 'import': pauseLock(300000); $('#importFile').click(); break;
     case 'paste': openPasteRestore(); break;
     case 'update': installUpdate(); break;
+    case 'locknow': showLock(); break;
     case 'checkupdate': checkForUpdate(true); break;
     case 'reset':
       ask('Erase ALL habits and history from this phone? This cannot be undone.', 'Erase everything', true).then(ok => {
@@ -832,6 +848,12 @@ $('#view').addEventListener('change', e => {
     case 'remon': s.reminders[+el.dataset.i].on = el.checked; save(); break;
     case 'weekstart': s.weekStart = +el.value; save(); break;
     case 'theme': s.theme = el.value; save(); applyTheme(); break;
+    case 'locktoggle':
+      el.checked = !!lock; // the switch only moves once setup or unlock succeeds
+      if (lock) unlockThen(disableLock);
+      else openLockSetup();
+      break;
+    case 'lockafter': lock.after = +el.value; saveLock(); break;
   }
 });
 
@@ -846,6 +868,7 @@ $('#view').addEventListener('input', e => {
 $('#importFile').addEventListener('change', async e => {
   const f = e.target.files[0];
   e.target.value = '';
+  pauseLock(3000);
   if (!f) return;
   restoreFrom(await f.text());
 });
@@ -996,8 +1019,9 @@ async function exportData() {
   const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
   const file = new File([blob], name, { type: 'application/json' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Habits backup' }); render(); return; }
-    catch (e) { if (e.name === 'AbortError') return; }
+    pauseLock(300000);
+    try { await navigator.share({ files: [file], title: 'Habits backup' }); pauseLock(3000); render(); return; }
+    catch (e) { pauseLock(3000); if (e.name === 'AbortError') return; }
   }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1074,7 +1098,9 @@ function checkReminders() {
   save();
   const left = pendingToday();
   if (left.length) {
-    notify('Habit check-in', `${plural(left.length, 'habit')} left today: ${left.slice(0, 3).map(h => h.name).join(', ')}${left.length > 3 ? '…' : ''}`);
+    notify('Habit check-in', lock
+      ? `${plural(left.length, 'habit')} left to tick today.` // keep habit names private when the app is locked
+      : `${plural(left.length, 'habit')} left today: ${left.slice(0, 3).map(h => h.name).join(', ')}${left.length > 3 ? '…' : ''}`);
     toast('🔔 Time for your habit check-in');
   }
   if (ui.tab === 'today') render();
@@ -1159,6 +1185,197 @@ async function installUpdate() {
   else location.reload();
 }
 
+/* ----------------------------- app lock ------------------------------- */
+/* Face ID / Touch ID through a passkey kept on this phone, plus a backup PIN.
+   Stored apart from the habit data so backups never carry it. */
+
+const LOCK_KEY = 'habits.lock';
+let lock = (() => { try { return EMBEDDED ? null : JSON.parse(localStorage.getItem(LOCK_KEY)); } catch (e) { return null; } })();
+let locked = !!lock;
+let afterUnlock = null; // something to do once the person proves it's them (e.g. turn the lock off)
+let hiddenAt = 0;
+let lockPausedUntil = 0; // system sheets (Face ID setup, share, file picker) briefly hide the app
+const pauseLock = ms => { lockPausedUntil = Date.now() + ms; };
+
+function saveLock() {
+  try {
+    if (lock) localStorage.setItem(LOCK_KEY, JSON.stringify(lock));
+    else localStorage.removeItem(LOCK_KEY);
+  } catch (e) { toast('Could not save the lock setting'); }
+}
+
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const unb64u = str => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4)), c => c.charCodeAt(0));
+const randomBytes = n => crypto.getRandomValues(new Uint8Array(n));
+
+async function hashPin(pin, salt) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: unb64u(salt), iterations: 150000, hash: 'SHA-256' }, key, 256);
+  return b64u(bits);
+}
+
+async function biometricAvailable() {
+  try {
+    return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable());
+  } catch (e) { return false; }
+}
+
+function createPasskey() {
+  return navigator.credentials.create({ publicKey: {
+    rp: { name: 'Habits', id: location.hostname },
+    user: { id: randomBytes(16), name: 'Habits app lock', displayName: 'Habits app lock' },
+    challenge: randomBytes(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' },
+    attestation: 'none',
+    timeout: 60000,
+  } });
+}
+
+async function openLockSetup() {
+  const bio = await biometricAvailable();
+  const m = $('#modal');
+  const pinInput = (id, label) => `<div class="field"><label for="${id}">${label}</label>
+    <input type="password" id="${id}" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password" class="pin-input"></div>`;
+  m.innerHTML = `<form class="sheet"><h2>Turn on app lock</h2>
+    <p class="small muted">${bio
+      ? 'You’ll unlock Habits with Face ID or Touch ID. Choose a backup PIN too, for when Face ID can’t be used. Your iPhone will then ask to save a passkey — that’s what lets Face ID unlock the app.'
+      : 'Face ID / Touch ID isn’t available to this app on this device, so Habits will lock with a PIN instead.'}</p>
+    ${pinInput('pin1', 'Backup PIN (4–8 digits)')}${pinInput('pin2', 'Type the PIN again')}
+    <p class="small muted">If you forget the PIN and Face ID stops working, you can’t get back in, so keep a backup of your data (Settings → Your data).</p>
+    <p class="small" id="lockSetupMsg" style="color:var(--bad)"></p>
+    <div class="sheet-actions"><button type="button" class="btn secondary" data-x="cancel">Cancel</button><button type="submit" class="btn">Turn on</button></div></form>`;
+  const msg = t => { m.querySelector('#lockSetupMsg').textContent = t; };
+  m.onclick = e => { if (e.target === m || e.target.dataset.x === 'cancel') m.close(); };
+  m.onsubmit = async e => {
+    e.preventDefault();
+    const p1 = m.querySelector('#pin1').value, p2 = m.querySelector('#pin2').value;
+    if (!/^\d{4,8}$/.test(p1)) { msg('The PIN must be 4 to 8 digits.'); return; }
+    if (p1 !== p2) { msg('The two PINs don’t match.'); return; }
+    let credId = null;
+    if (bio) {
+      // Called straight from the tap, as iOS requires for Face ID.
+      pauseLock(120000);
+      try { credId = b64u((await createPasskey()).rawId); }
+      catch (err) { msg(err.name === 'NotAllowedError' ? 'Face ID setup was cancelled. Tap Turn on to try again.' : 'Face ID couldn’t be set up: ' + err.message); return; }
+      finally { pauseLock(3000); }
+    }
+    const salt = b64u(randomBytes(16));
+    lock = { credId, salt, pinHash: await hashPin(p1, salt), after: 0, fails: 0, until: 0 };
+    saveLock();
+    m.close(); render(); toast('App lock is on');
+  };
+  m.showModal();
+}
+
+function disableLock() {
+  lock = null; saveLock();
+  toast('App lock is off');
+}
+
+/* Ask for Face ID / PIN, then run `fn` (used to turn the lock off). */
+function unlockThen(fn) {
+  afterUnlock = fn;
+  showLock(true);
+}
+
+function showLock(tryBiometric = false) {
+  if (!lock) return;
+  locked = true;
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  $('#view').innerHTML = ''; // nothing private stays on screen
+  const el = $('#lock');
+  el.hidden = false;
+  el.innerHTML = `<div class="lock-inner">
+    <img src="icons/icon-192.png" class="lock-icon" alt="">
+    <h2>${afterUnlock ? 'Confirm it’s you' : 'Habits is locked'}</h2>
+    ${lock.credId ? '<button class="btn block" data-lock="bio">Unlock with Face ID / Touch ID</button>' : ''}
+    <form id="pinForm"><input type="password" id="lockPin" inputmode="numeric" pattern="[0-9]*" maxlength="8"
+      autocomplete="off" placeholder="${lock.credId ? 'or enter your PIN' : 'Enter your PIN'}" aria-label="PIN" class="pin-input">
+      <button class="btn ${lock.credId ? 'secondary' : ''} block" type="submit">Unlock with PIN</button></form>
+    <p class="small" id="lockMsg" role="alert"></p>
+    ${afterUnlock ? '<button class="btn secondary block" data-lock="cancel">Cancel</button>' : ''}
+  </div>`;
+  if (tryBiometric && lock.credId) unlockBiometric(true);
+}
+
+function lockMsg(text, shake) {
+  const m = $('#lockMsg');
+  if (!m) return;
+  m.textContent = text;
+  if (shake) { const f = $('#pinForm'); f.classList.remove('shake'); void f.offsetWidth; f.classList.add('shake'); }
+}
+
+function unlockDone() {
+  locked = false;
+  $('#lock').hidden = true;
+  $('#lock').innerHTML = '';
+  const fn = afterUnlock;
+  afterUnlock = null;
+  if (fn) fn();
+  render();
+  checkReminders();
+}
+
+async function unlockBiometric(quiet = false) {
+  try {
+    const cred = await navigator.credentials.get({ publicKey: {
+      challenge: randomBytes(32),
+      rpId: location.hostname,
+      allowCredentials: [{ type: 'public-key', id: unb64u(lock.credId) }],
+      userVerification: 'required',
+      timeout: 60000,
+    } });
+    // Byte 32 of the authenticator data holds the flags; 0x04 = Face ID / Touch ID / passcode was checked.
+    if (!(new Uint8Array(cred.response.authenticatorData)[32] & 0x04)) throw new Error('not verified');
+    lock.fails = 0; lock.until = 0; saveLock();
+    unlockDone();
+  } catch (e) {
+    // NotAllowedError = cancelled, or iOS wants a tap first; the button is right there.
+    if (!quiet && e.name !== 'NotAllowedError') lockMsg('Face ID didn’t work. Try again or use your PIN.');
+  }
+}
+
+async function unlockPin(pin) {
+  const now = Date.now();
+  if (lock.until && now < lock.until) { lockMsg(`Too many wrong PINs. Try again in ${Math.ceil((lock.until - now) / 1000)} seconds.`, true); return; }
+  if (await hashPin(pin, lock.salt) === lock.pinHash) {
+    lock.fails = 0; lock.until = 0; saveLock();
+    unlockDone();
+    return;
+  }
+  lock.fails = (lock.fails || 0) + 1;
+  if (lock.fails >= 5) lock.until = now + Math.min(15 * 60000, 30000 * 2 ** (lock.fails - 5));
+  saveLock();
+  $('#lockPin').value = '';
+  lockMsg(lock.fails >= 5 ? 'Wrong PIN. Too many tries — wait a moment before trying again.' : 'Wrong PIN.', true);
+}
+
+$('#lock').addEventListener('click', e => {
+  const b = e.target.closest('[data-lock]');
+  if (!b) return;
+  if (b.dataset.lock === 'bio') unlockBiometric();
+  else if (b.dataset.lock === 'cancel') { afterUnlock = null; unlockDone(); }
+});
+$('#lock').addEventListener('submit', e => {
+  e.preventDefault();
+  const pin = $('#lockPin').value;
+  if (pin) unlockPin(pin);
+});
+
+function onVisibility() {
+  if (document.hidden) {
+    hiddenAt = Date.now();
+    if (lock && !locked) document.body.classList.add('privacy'); // keep habits out of the app switcher
+    return;
+  }
+  document.body.classList.remove('privacy');
+  const away = Date.now() - hiddenAt;
+  // "Immediately" still allows a few seconds, so a Face ID or share sheet doesn't lock you out mid-task.
+  if (lock && !locked && Date.now() > lockPausedUntil && away >= Math.max(3000, (lock.after || 0) * 60000)) showLock(true);
+  if (!locked) onWake();
+}
+
 /* ------------------------------- boot --------------------------------- */
 
 function applyTheme() {
@@ -1181,10 +1398,10 @@ function onWake() {
 
 applyTheme();
 if (state.firstRun) save();
-render();
-checkReminders();
-setInterval(onWake, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) onWake(); });
+if (locked) showLock(true);
+else { render(); checkReminders(); }
+setInterval(() => { if (!locked) onWake(); }, 30000);
+document.addEventListener('visibilitychange', onVisibility);
 
 setupUpdates();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

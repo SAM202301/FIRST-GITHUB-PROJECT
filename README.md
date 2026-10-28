@@ -20,6 +20,7 @@ phone. There are no accounts, no servers and no tracking.
 | **Progress** | Overall score, streaks, a list of **what you're doing well vs. what needs work**, habits that are improving or slipping, best and worst weekday, a score for each life area (Health, Mind, Finance…) and a 12-week trend. |
 | **Reminders** | Defaults to **6 PM and 8 PM**. You can change, add or remove times. |
 | **Backup** | Save a backup file to the Files app and restore it later, or on a new phone. |
+| **App lock** | Optional Face ID / Touch ID lock (with a backup PIN), set in Settings → App lock. |
 | Extras | Dark mode, streaks 🔥, archiving habits without losing their history, works fully offline. |
 
 ## Installing it on your iPhone
